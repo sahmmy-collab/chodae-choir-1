@@ -4,42 +4,81 @@ import numpy as np
 import io
 import json
 import os
+import requests
+import base64
 
 # 1. 페이지 설정 및 디자인 (모바일 대응 강화)
-st.set_page_config(page_title="성가대 통합 관리 시스템 v14.60", layout="wide")
-
+st.set_page_config(page_title="성가대 통합 관리 시스템 v14.70", layout="wide")
 st.markdown("""
-    <style>
-    /* 모바일 기기 대응을 위한 메타 태그 설정 효과 */
-    @media (max-width: 768px) {
-        .stTextInput input { font-size: 1.0rem !important; height: 45px !important; }
-        .row-label { font-size: 1.2rem !important; line-height: 45px !important; }
-        .col-label { font-size: 1.0rem !important; }
-        .cross-container { font-size: 40px !important; height: 45px !important; }
-    }
-    
-    .stTextInput { margin-bottom: 8px !important; }
-    .stTextInput input { 
-        font-weight: bold !important; color: #000 !important; font-size: 1.2rem !important; 
-        text-align: center; height: 50px !important; border: 2px solid #333 !important; 
-        border-radius: 6px !important; padding: 0px !important;
-    }
-    input:placeholder-shown { background-color: #FFF9C4 !important; }
-    .row-label { font-size: 1.8rem !important; font-weight: 900 !important; color: #111; text-align: center; line-height: 50px; }
-    .col-label { text-align: center; font-weight: 900 !important; color: #d32f2f; font-size: 1.5rem !important; margin-bottom: 5px; }
-    .cross-container { display: flex; justify-content: center; align-items: center; font-size: 50px; color: #444; height: 55px; margin-bottom: 5px; width: 100%; }
-    .stButton button { font-size: 1.0rem !important; font-weight: bold !important; height: 50px !important; border-radius: 8px; }
-    .stats-card { background-color: #f8f9fa; padding: 10px; border-radius: 8px; border-left: 5px solid #d32f2f; margin-bottom: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+/* 모바일 기기 대응을 위한 메타 태그 설정 효과 */
+@media (max-width: 768px) {
+.stTextInput input { font-size: 1.0rem !important; height: 45px !important; }
+.row-label { font-size: 1.2rem !important; line-height: 45px !important; }
+.col-label { font-size: 1.0rem !important; }
+.cross-container { font-size: 40px !important; height: 45px !important; }
+}
+.stTextInput { margin-bottom: 8px !important; }
+.stTextInput input {
+font-weight: bold !important; color: #000 !important; font-size: 1.2rem !important;
+text-align: center; height: 50px !important; border: 2px solid #333 !important;
+border-radius: 6px !important; padding: 0px !important;
+}
+input:placeholder-shown { background-color: #FFF9C4 !important; }
+.row-label { font-size: 1.8rem !important; font-weight: 900 !important; color: #111; text-align: center; line-height: 50px; }
+.col-label { text-align: center; font-weight: 900 !important; color: #d32f2f; font-size: 1.5rem !important; margin-bottom: 5px; }
+.cross-container { display: flex; justify-content: center; align-items: center; font-size: 50px; color: #444; height: 55px; margin-bottom: 5px; width: 100%; }
+.stButton button { font-size: 1.0rem !important; font-weight: bold !important; height: 50px !important; border-radius: 8px; }
+.stats-card { background-color: #f8f9fa; padding: 10px; border-radius: 8px; border-left: 5px solid #d32f2f; margin-bottom: 10px; }
+</style>
+""", unsafe_allow_html=True)
 
 # 2. 데이터 관리 로직
 DATA_FILE = "choir_data.json"
 
+def save_to_github(json_str):
+    """GitHub API를 통해 choir_data.json을 직접 커밋하여 영구 저장"""
+    try:
+        token = st.secrets["GITHUB_TOKEN"]
+        repo  = st.secrets["GITHUB_REPO"]
+        path  = st.secrets["GITHUB_FILE"]
+
+        url = f"https://api.github.com/repos/{repo}/contents/{path}"
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github+json"
+        }
+
+        # 현재 파일의 SHA 가져오기 (업데이트 시 필수)
+        res = requests.get(url, headers=headers)
+        sha = res.json().get("sha", None)
+
+        # base64 인코딩 후 커밋
+        encoded = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": "Update choir data",
+            "content": encoded,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        result = requests.put(url, headers=headers, json=payload)
+        return result.status_code in (200, 201)
+
+    except Exception as e:
+        return False
+
 def save_to_json():
     data = {"stage": st.session_state.stage_data, "audience": st.session_state.audience_data}
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
+    json_str = json.dumps(data, ensure_ascii=False, indent=2)
+
+    # GitHub에 저장 시도
+    github_ok = save_to_github(json_str)
+
+    # GitHub 저장 실패 시 로컬 파일로 fallback
+    if not github_ok:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            f.write(json_str)
 
 def update_master_stage():
     for k in st.session_state.stage_keys:
@@ -54,12 +93,36 @@ def update_master_audience():
     save_to_json()
 
 def load_all_data():
+    # GitHub에서 최신 데이터 로드 시도
+    try:
+        token = st.secrets["GITHUB_TOKEN"]
+        repo  = st.secrets["GITHUB_REPO"]
+        path  = st.secrets["GITHUB_FILE"]
+
+        url = f"https://api.github.com/repos/{repo}/contents/{path}"
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github+json"
+        }
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            content = base64.b64decode(res.json()["content"]).decode("utf-8")
+            data = json.loads(content)
+            if isinstance(data, dict) and "stage" in data:
+                return data
+    except Exception:
+        pass
+
+    # GitHub 실패 시 로컬 파일에서 로드
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 content = json.load(f)
-                if isinstance(content, dict) and "stage" in content: return content
-        except: return None
+            if isinstance(content, dict) and "stage" in content:
+                return content
+        except:
+            return None
+
     return None
 
 @st.cache_data
@@ -134,6 +197,7 @@ st.divider()
 
 # --- [2. 객석 배치표] ---
 st.header("🪑 2. 객석 배치표")
+
 if st.button("🔄 무대 명단 입장 순서 정렬 (뒷줄 우선)", use_container_width=True):
     p_groups = {p: [] for p in PART_ZONES}; p_groups["미등록"] = []
     for t in TIER_CONFIG:
@@ -166,6 +230,7 @@ if st.button("🔄 무대 명단 입장 순서 정렬 (뒷줄 우선)", use_cont
     save_to_json(); st.rerun()
 
 a_swap_mode = st.toggle("🔄 객석 자리 교체 모드", key="audience_swap_toggle")
+
 h_cols = st.columns([1.5] + [3.6]*6)
 for i, c_num in enumerate(COLS): h_cols[i+1].markdown(f"<div class='col-label'>{c_num}</div>", unsafe_allow_html=True)
 
@@ -197,7 +262,6 @@ for name in st.session_state.stage_data.values():
         if part in current_counts: current_counts[part] += 1
         else: current_counts["미등록"] += 1
 total_count = sum(current_counts.values())
-
 stats_cols = st.columns(len(current_counts))
 for idx, (p_name, count) in enumerate(current_counts.items()):
     with stats_cols[idx]:
