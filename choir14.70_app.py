@@ -149,9 +149,10 @@ TIER_CONFIG = [
     {"lv": 2, "left": "Soprano", "right": "Alto", "seats": 14, "solo": "SA"},
     {"lv": 1, "left": "Soprano", "right": "Alto", "seats": 13, "solo": None},
 ]
-ROWS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K']
+ROWS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L']
+SPARE_ROW = 'L'  # 예비석: 파트 구역이 꽉 찼거나 명단에 없는 대원을 배치
 COLS = [30, 29, 28, 27, 26, 25]
-PART_ZONES = {"Soprano": ['D', 'C', 'B'], "Alto": ['F', 'E'], "Tenor": ['H', 'G'], "Bass": ['J', 'I']}
+PART_ZONES = {"Soprano": ['E', 'D', 'C', 'B'], "Alto": ['G', 'F'], "Tenor": ['I', 'H'], "Bass": ['K', 'J']}
 FIXED_EMPTY_SEATS = ["B_25", "B_26"]
 
 if 'initialized' not in st.session_state:
@@ -216,36 +217,36 @@ if st.button("🔄 무대 명단 입장 순서 정렬 (뒷줄 우선)", use_cont
             val = "공석" if k in FIXED_EMPTY_SEATS else ""
             st.session_state.audience_data[k] = val
             st.session_state[f"a_in_{k}"] = val
+    overflow = []  # 파트 구역 자리가 모자라 넘친 대원
     for p_name, p_rows in PART_ZONES.items():
         names = p_groups[p_name]
-        if not names: continue
-        n_ptr = 0
-        for r_label in p_rows:
-            if n_ptr >= len(names): break
-            for c_label in COLS:
-                aid = f"{r_label}_{c_label}"
-                if aid in FIXED_EMPTY_SEATS: continue
-                if n_ptr < len(names):
-                    st.session_state.audience_data[aid] = names[n_ptr]
-                    st.session_state[f"a_in_{aid}"] = names[n_ptr]
-                    n_ptr += 1
-                else: break
-    # 명단(엑셀)에 없는 '미등록' 대원도 빠지지 않도록 K열(예비석)에 배치
-    unreg = p_groups["미등록"]
-    if unreg:
-        spare = [f"K_{c}" for c in COLS if f"K_{c}" not in FIXED_EMPTY_SEATS]
-        for aid, name in zip(spare, unreg):
+        seats = [f"{r}_{c}" for r in p_rows for c in COLS if f"{r}_{c}" not in FIXED_EMPTY_SEATS]
+        for aid, name in zip(seats, names):
             st.session_state.audience_data[aid] = name
             st.session_state[f"a_in_{aid}"] = name
-        st.session_state.unreg_warning = unreg
-    else:
-        st.session_state.unreg_warning = []
+        overflow += [f"{n}({p_name})" for n in names[len(seats):]]
+    # 넘친 대원 + 명단(엑셀)에 없는 '미등록' 대원은 빠지지 않도록 예비석(L열)에 배치
+    unreg = p_groups["미등록"]
+    spare = [f"{SPARE_ROW}_{c}" for c in COLS if f"{SPARE_ROW}_{c}" not in FIXED_EMPTY_SEATS]
+    extra = [n.split("(")[0] for n in overflow] + unreg
+    for aid, name in zip(spare, extra):
+        st.session_state.audience_data[aid] = name
+        st.session_state[f"a_in_{aid}"] = name
+    st.session_state.sort_warnings = []
+    if overflow:
+        st.session_state.sort_warnings.append(
+            f"파트 구역 자리가 모자라 {SPARE_ROW}열(예비석)에 배치했습니다: " + ", ".join(overflow))
+    if unreg:
+        st.session_state.sort_warnings.append(
+            f"엑셀 명단(choir_list.xlsx)에 없는 이름이라 {SPARE_ROW}열(예비석)에 배치했습니다: "
+            + ", ".join(unreg) + " — 이름 철자를 확인하거나 엑셀에 추가해 주세요.")
+    if len(extra) > len(spare):
+        st.session_state.sort_warnings.append(
+            "예비석도 모자라 객석에 넣지 못한 대원: " + ", ".join(extra[len(spare):]))
     save_to_json(); st.rerun()
 
-if st.session_state.get("unreg_warning"):
-    st.warning("⚠️ 엑셀 명단(choir_list.xlsx)에 없는 이름이라 K열에 배치했습니다: "
-               + ", ".join(st.session_state.unreg_warning)
-               + " — 이름 철자를 확인하거나 엑셀에 추가해 주세요.")
+for msg in st.session_state.get("sort_warnings", []):
+    st.warning("⚠️ " + msg)
 
 a_swap_mode = st.toggle("🔄 객석 자리 교체 모드", key="audience_swap_toggle")
 
