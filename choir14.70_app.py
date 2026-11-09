@@ -125,9 +125,12 @@ def load_all_data():
 
     return None
 
+MEMBER_FILE = "choir_list.xlsx"
+
 @st.cache_data
-def load_member_part_map():
-    file_name = "choir_list.xlsx"
+def load_member_part_map(file_mtime=None):
+    # file_mtime: 엑셀 파일 수정 시각. 파일이 바뀌면 캐시가 자동으로 새로 읽힘
+    file_name = MEMBER_FILE
     if os.path.exists(file_name):
         try:
             df = pd.read_excel(file_name)
@@ -137,7 +140,7 @@ def load_member_part_map():
         except: return {}
     return {}
 
-member_part_map = load_member_part_map()
+member_part_map = load_member_part_map(os.path.getmtime(MEMBER_FILE) if os.path.exists(MEMBER_FILE) else None)
 
 # 4. 구성 설정
 TIER_CONFIG = [
@@ -227,7 +230,22 @@ if st.button("🔄 무대 명단 입장 순서 정렬 (뒷줄 우선)", use_cont
                     st.session_state[f"a_in_{aid}"] = names[n_ptr]
                     n_ptr += 1
                 else: break
+    # 명단(엑셀)에 없는 '미등록' 대원도 빠지지 않도록 K열(예비석)에 배치
+    unreg = p_groups["미등록"]
+    if unreg:
+        spare = [f"K_{c}" for c in COLS if f"K_{c}" not in FIXED_EMPTY_SEATS]
+        for aid, name in zip(spare, unreg):
+            st.session_state.audience_data[aid] = name
+            st.session_state[f"a_in_{aid}"] = name
+        st.session_state.unreg_warning = unreg
+    else:
+        st.session_state.unreg_warning = []
     save_to_json(); st.rerun()
+
+if st.session_state.get("unreg_warning"):
+    st.warning("⚠️ 엑셀 명단(choir_list.xlsx)에 없는 이름이라 K열에 배치했습니다: "
+               + ", ".join(st.session_state.unreg_warning)
+               + " — 이름 철자를 확인하거나 엑셀에 추가해 주세요.")
 
 a_swap_mode = st.toggle("🔄 객석 자리 교체 모드", key="audience_swap_toggle")
 
