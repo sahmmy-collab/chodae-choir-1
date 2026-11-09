@@ -150,9 +150,10 @@ TIER_CONFIG = [
     {"lv": 1, "left": "Soprano", "right": "Alto", "seats": 13, "solo": None},
 ]
 ROWS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L']
-SPARE_ROW = 'L'  # 예비석: 파트 구역이 꽉 찼거나 명단에 없는 대원을 배치
 COLS = [30, 29, 28, 27, 26, 25]
-PART_ZONES = {"Soprano": ['E', 'D', 'C', 'B'], "Alto": ['G', 'F'], "Tenor": ['I', 'H'], "Bass": ['K', 'J']}
+# 파트 순서 (객석 앞줄부터). 줄 배정은 정렬할 때 인원수에 맞춰 자동으로 계산됨
+PART_ZONES = {"Soprano": [], "Alto": [], "Tenor": [], "Bass": []}
+MIN_VISIBLE_ROWS = 6  # 객석표에 최소한 보여줄 줄 수 (A~F)
 FIXED_EMPTY_SEATS = ["B_25", "B_26"]
 
 if 'initialized' not in st.session_state:
@@ -217,32 +218,40 @@ if st.button("🔄 무대 명단 입장 순서 정렬 (뒷줄 우선)", use_cont
             val = "공석" if k in FIXED_EMPTY_SEATS else ""
             st.session_state.audience_data[k] = val
             st.session_state[f"a_in_{k}"] = val
-    overflow = []  # 파트 구역 자리가 모자라 넘친 대원
-    for p_name, p_rows in PART_ZONES.items():
-        names = p_groups[p_name]
-        seats = [f"{r}_{c}" for r in p_rows for c in COLS if f"{r}_{c}" not in FIXED_EMPTY_SEATS]
-        for aid, name in zip(seats, names):
-            st.session_state.audience_data[aid] = name
-            st.session_state[f"a_in_{aid}"] = name
-        overflow += [f"{n}({p_name})" for n in names[len(seats):]]
-    # 넘친 대원 + 명단(엑셀)에 없는 '미등록' 대원은 빠지지 않도록 예비석(L열)에 배치
-    unreg = p_groups["미등록"]
-    spare = [f"{SPARE_ROW}_{c}" for c in COLS if f"{SPARE_ROW}_{c}" not in FIXED_EMPTY_SEATS]
-    extra = [n.split("(")[0] for n in overflow] + unreg
-    for aid, name in zip(spare, extra):
-        st.session_state.audience_data[aid] = name
-        st.session_state[f"a_in_{aid}"] = name
+    # 파트별로 필요한 줄 수만큼만 B열부터 빈 줄 없이 이어서 배정
+    #  - 각 파트 안에서는 뒷줄부터 채움 (무대 뒷단 → 객석 뒷줄)
+    #  - 모든 줄에 최소 1명이 앉도록 인원을 나눔 → 완전히 빈 줄이 생기지 않음
+    #  - 명단(엑셀)에 없는 '미등록' 대원은 마지막 파트 다음 줄에 배치
+    def row_seats(r):
+        return [f"{r}_{c}" for c in COLS if f"{r}_{c}" not in FIXED_EMPTY_SEATS]
+    free_rows = ROWS[1:]  # A열은 Chamber/CH 고정
+    r_ptr = 0
+    groups = [(p, p_groups[p]) for p in PART_ZONES] + [("미등록", p_groups["미등록"])]
+    not_seated = []
+    for p_name, names in groups:
+        if not names: continue
+        rows, cap = [], 0
+        while cap < len(names) and r_ptr < len(free_rows):
+            rows.append(free_rows[r_ptr]); cap += len(row_seats(free_rows[r_ptr])); r_ptr += 1
+        rows = rows[::-1]  # 뒷줄부터
+        remaining = len(names); idx = 0
+        for i, r in enumerate(rows):
+            seats = row_seats(r)
+            cnt = min(len(seats), remaining - (len(rows) - i - 1))
+            for aid in seats[:cnt]:
+                st.session_state.audience_data[aid] = names[idx]
+                st.session_state[f"a_in_{aid}"] = names[idx]
+                idx += 1
+            remaining -= cnt
+        not_seated += names[idx:]
     st.session_state.sort_warnings = []
-    if overflow:
+    if p_groups["미등록"]:
         st.session_state.sort_warnings.append(
-            f"파트 구역 자리가 모자라 {SPARE_ROW}열(예비석)에 배치했습니다: " + ", ".join(overflow))
-    if unreg:
+            "엑셀 명단(choir_list.xlsx)에 없는 이름이라 맨 뒤쪽 줄에 따로 배치했습니다: "
+            + ", ".join(p_groups["미등록"]) + " — 이름 철자를 확인하거나 엑셀에 추가해 주세요.")
+    if not_seated:
         st.session_state.sort_warnings.append(
-            f"엑셀 명단(choir_list.xlsx)에 없는 이름이라 {SPARE_ROW}열(예비석)에 배치했습니다: "
-            + ", ".join(unreg) + " — 이름 철자를 확인하거나 엑셀에 추가해 주세요.")
-    if len(extra) > len(spare):
-        st.session_state.sort_warnings.append(
-            "예비석도 모자라 객석에 넣지 못한 대원: " + ", ".join(extra[len(spare):]))
+            "객석 자리가 모자라 넣지 못한 대원: " + ", ".join(not_seated))
     save_to_json(); st.rerun()
 
 for msg in st.session_state.get("sort_warnings", []):
@@ -250,10 +259,15 @@ for msg in st.session_state.get("sort_warnings", []):
 
 a_swap_mode = st.toggle("🔄 객석 자리 교체 모드", key="audience_swap_toggle")
 
+used_rows = [r for r in ROWS if any(
+    st.session_state.audience_data.get(f"{r}_{c}", "").strip() not in ("", "공석") for c in COLS)]
+last_idx = max([ROWS.index(r) for r in used_rows] + [MIN_VISIBLE_ROWS - 1])
+VISIBLE_ROWS = ROWS[:last_idx + 1]
+
 h_cols = st.columns([1.5] + [3.6]*6)
 for i, c_num in enumerate(COLS): h_cols[i+1].markdown(f"<div class='col-label'>{c_num}</div>", unsafe_allow_html=True)
 
-for r_label in ROWS:
+for r_label in VISIBLE_ROWS:
     r_cols = st.columns([1.5] + [3.6]*6)
     r_cols[0].markdown(f"<div class='row-label' style='font-size:1.2rem;'>{r_label}</div>", unsafe_allow_html=True)
     for c_idx, c_label in enumerate(COLS):
