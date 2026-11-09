@@ -203,10 +203,11 @@ st.divider()
 # --- [2. 객석 배치표] ---
 st.header("🪑 2. 객석 배치표")
 
-if st.button("🔄 무대 명단 입장 순서 정렬 (뒷줄 우선)", use_container_width=True):
+if st.button("🔄 무대 명단 입장 순서 정렬 (1단부터 입장)", use_container_width=True):
+    # 퇴장(입장) 순서: 각 파트는 1단부터, 같은 단에서는 관객석에서 볼 때 왼쪽 사람부터 빠져나옴
     p_groups = {p: [] for p in PART_ZONES}; p_groups["미등록"] = []
-    for t in TIER_CONFIG:
-        for s in range(t['seats']-1, -1, -1):
+    for t in sorted(TIER_CONFIG, key=lambda x: x['lv']):
+        for s in range(t['seats']):
             sid = f"T{t['lv']}_S{s}"
             name = st.session_state.get(f"s_in_{sid}", st.session_state.stage_data.get(sid, "")).strip()
             if name:
@@ -219,11 +220,11 @@ if st.button("🔄 무대 명단 입장 순서 정렬 (뒷줄 우선)", use_cont
             st.session_state.audience_data[k] = val
             st.session_state[f"a_in_{k}"] = val
     # 파트별로 필요한 줄 수만큼만 B열부터 빈 줄 없이 이어서 배정
-    #  - 각 파트 안에서는 뒷줄부터 채움 (무대 뒷단 → 객석 뒷줄)
-    #  - 모든 줄에 최소 1명이 앉도록 인원을 나눔 → 완전히 빈 줄이 생기지 않음
+    #  - 각 파트는 자기 구역의 앞줄부터, 줄 안에서는 우측 끝(25번, 공석이면 그 옆)부터 앉음
+    #  - 필요한 줄 수만큼만 배정하므로 완전히 빈 줄이 생기지 않음
     #  - 명단(엑셀)에 없는 '미등록' 대원은 마지막 파트 다음 줄에 배치
     def row_seats(r):
-        return [f"{r}_{c}" for c in COLS if f"{r}_{c}" not in FIXED_EMPTY_SEATS]
+        return [f"{r}_{c}" for c in reversed(COLS) if f"{r}_{c}" not in FIXED_EMPTY_SEATS]
     free_rows = ROWS[1:]  # A열은 Chamber/CH 고정
     r_ptr = 0
     groups = [(p, p_groups[p]) for p in PART_ZONES] + [("미등록", p_groups["미등록"])]
@@ -233,17 +234,11 @@ if st.button("🔄 무대 명단 입장 순서 정렬 (뒷줄 우선)", use_cont
         rows, cap = [], 0
         while cap < len(names) and r_ptr < len(free_rows):
             rows.append(free_rows[r_ptr]); cap += len(row_seats(free_rows[r_ptr])); r_ptr += 1
-        rows = rows[::-1]  # 뒷줄부터
-        remaining = len(names); idx = 0
-        for i, r in enumerate(rows):
-            seats = row_seats(r)
-            cnt = min(len(seats), remaining - (len(rows) - i - 1))
-            for aid in seats[:cnt]:
-                st.session_state.audience_data[aid] = names[idx]
-                st.session_state[f"a_in_{aid}"] = names[idx]
-                idx += 1
-            remaining -= cnt
-        not_seated += names[idx:]
+        seats = [aid for r in rows for aid in row_seats(r)]  # 앞줄부터, 우측 끝부터
+        for aid, name in zip(seats, names):
+            st.session_state.audience_data[aid] = name
+            st.session_state[f"a_in_{aid}"] = name
+        not_seated += names[len(seats):]
     st.session_state.sort_warnings = []
     if p_groups["미등록"]:
         st.session_state.sort_warnings.append(
